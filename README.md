@@ -1,5 +1,5 @@
 
-AI Account Intelligence & Enrichment System
+**AI Account Intelligence & Enrichment System**
 Built for the Fello AI Builder Hackathon. Converts a company name, an anonymous visitor's IP/behavior, or both, into structured, sales-ready account intelligence and a recommended next action — in one Streamlit app, powered by a three-agent Gemini pipeline.
 Table of contents
 The problem
@@ -15,7 +15,9 @@ Design decisions worth knowing
 Known limitations / what's next
 The problem, briefly
 Sales and marketing teams have two data problems: anonymous website visitors give almost no actionable signal, and incomplete company data makes it hard to know who to prioritize. This system takes either a bare company name, raw anonymous visitor activity (IP + behavior), or both — and turns it into something a salesperson can act on immediately: a company profile, likely persona, an intent score, and a recommended next step.
-How it works: a 3-agent pipeline
+
+
+**How it works: a 3-agent pipeline**
 Rather than stitching together multiple paid enrichment APIs (Clearbit, Apollo, BuiltWild, etc.) within a short build window, this prototype uses Gemini as a simulated research agent, split into three narrow, sequential roles — a real multi-agent workflow, not one large prompt:
 Input (company name, and/or IP + location, and/or visitor behavior)
         │
@@ -91,7 +93,7 @@ Researcher → Scorer → Strategist
 Data confidence scoring (optional extension)
 confidence_notes field on every result
 
-Tech stack
+**Tech stack**
 Python 3.10+
 Streamlit — single-page frontend
 Google Gemini API (google-genai SDK) — free tier (Flash / Flash-Lite)
@@ -112,7 +114,7 @@ ai-account-intel/
         ├── sample_companies.json
         └── sample_visitor_signals.json
 
-Setup
+**Setup**
 git clone <this-repo-url>
 cd ai-account-intel
 python3 -m venv venv
@@ -127,7 +129,7 @@ Everything else in .env (model name, retry count, batch delay, etc.) is optional
 Run it:
 streamlit run app.py
 
-How to use it
+**How to use it**
 The app accepts any combination of the following — the only requirement is at least one way to identify a company:
 Company name (most reliable) — e.g. BrightPath Lending
 Partial domain (optional) — sharpens identification
