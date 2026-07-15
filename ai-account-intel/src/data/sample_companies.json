@@ -1,0 +1,29 @@
+{
+  "_note": "Test fixtures for the account intel pipeline. Categories starting with _ are ignored by run_tests.py.",
+  "golden_path": [
+    { "company_name": "Redfin", "partial_domain": "redfin.com" },
+    { "company_name": "Shopify", "partial_domain": "shopify.com" },
+    { "company_name": "Stripe" }
+  ],
+  "messy_input": [
+    { "company_name": "  reDFin  " },
+    { "company_name": "shopfy" },
+    { "company_name": "TCS" }
+  ],
+  "messy_fabricated": [
+    { "company_name": "BrightPath Lending" },
+    { "company_name": "Quantoryx Dynamics" },
+    { "company_name": "ZzxqTech Solutions" }
+  ],
+  "edge_cases": [
+    { "company_name": "X" },
+    { "company_name": "12345" }
+  ],
+  "batch_test_list": [
+    { "company_name": "Redfin" },
+    { "company_name": "Zillow" },
+    { "company_name": "Notion" },
+    { "company_name": "Figma" },
+    { "company_name": "Databricks" }
+  ]
+}

@@ -1,0 +1,202 @@
+import streamlit as st
+
+from src import config
+from src.agents import run_full_pipeline
+from src.validate import validate_intel
+
+st.set_page_config(page_title="AI Account Intelligence", layout="wide")
+
+# ---------- SIDEBAR: live configuration, nothing hardcoded ----------
+st.sidebar.title("Settings")
+
+if not config.has_valid_key():
+    st.sidebar.error("No GEMINI_API_KEY found. Add one to .env (local) or "
+                      "Streamlit secrets (deployed).")
+else:
+    st.sidebar.success("Gemini API key loaded.")
+
+model_choice = st.sidebar.selectbox(
+    "Model",
+    options=[config.GEMINI_MODEL, config.GEMINI_FALLBACK_MODEL],
+    index=0,
+    help="Switch to the fallback/lite model if you hit rate limits.",
+)
+st.sidebar.caption(f"Max retries: {config.MAX_RETRIES} · "
+                   f"Retry base wait: {config.RETRY_BASE_WAIT_SECONDS}s · "
+                   f"Batch delay: {config.BATCH_DELAY_SECONDS}s")
+st.sidebar.caption("Change any of these in your .env file — no code edits needed.")
+
+st.title("AI Account Intelligence")
+st.caption("Enter a company name, OR an IP address with no name at all (simulated "
+           "reverse-IP identification) — optionally add browsing behavior for a "
+           "sharper intent score.")
+
+# ---------- INPUT ----------
+col1, col2 = st.columns(2)
+
+with col1:
+    company_name = st.text_input(
+        "Company name (optional if IP address is provided below)",
+        placeholder="e.g. BrightPath Lending",
+    )
+    partial_domain = st.text_input("Partial domain (optional)", placeholder="e.g. brightpathlending")
+
+with col2:
+    st.caption("Anonymous visitor? Leave company name blank and use IP/location "
+               "below instead — simulates reverse-IP company identification.")
+    ip_address = st.text_input("IP address (optional)", placeholder="e.g. 34.201.112.55")
+    location = st.text_input("Location (optional)", placeholder="e.g. Dallas, TX, USA")
+
+with st.expander("Add visitor behavior (optional)", expanded=False):
+    vcol1, vcol2 = st.columns(2)
+    with vcol1:
+        pages_visited_raw = st.text_area(
+            "Pages visited (one per line)",
+            placeholder="/pricing\n/ai-sales-agent\n/case-studies",
+        )
+        referral_source = st.text_input("Referral source", placeholder="e.g. google_organic")
+    with vcol2:
+        time_on_site = st.number_input("Time on site (seconds)", min_value=0, value=0)
+        visits_this_week = st.number_input("Visits this week", min_value=0, value=0)
+        device = st.selectbox("Device", ["", "desktop", "mobile", "tablet", "unknown"])
+
+analyze_clicked = st.button("Analyze", type="primary")
+
+# ---------- RUN + RENDER ----------
+if analyze_clicked:
+    has_identity_input = bool(company_name.strip()) or bool(ip_address.strip()) or bool(location.strip())
+
+    if not has_identity_input:
+        st.error("Enter a company name, OR an IP address / location for anonymous-visitor identification.")
+    else:
+        pages_visited = [p.strip() for p in pages_visited_raw.split("\n") if p.strip()] if pages_visited_raw else []
+        has_behavior_data = bool(pages_visited or time_on_site or visits_this_week or referral_source or device)
+
+        visitor_signals = None
+        if has_behavior_data:
+            visitor_signals = {
+                "pages_visited": pages_visited,
+                "time_on_site_seconds": time_on_site,
+                "visits_this_week": visits_this_week,
+                "referral_source": referral_source or None,
+                "device": device or None,
+            }
+
+        with st.spinner("Researching, scoring, and strategizing..."):
+            try:
+                raw_result = run_full_pipeline(
+                    company_name=company_name.strip() or None,
+                    partial_domain=partial_domain or None,
+                    visitor_signals=visitor_signals,
+                    ip_address=ip_address.strip() or None,
+                    location=location.strip() or None,
+                    model=model_choice,
+                )
+                parsed, error = validate_intel(raw_result)
+
+                if error:
+                    st.error(f"Model output did not match expected schema:\n\n{error}")
+                else:
+                    st.divider()
+
+                    # ---- Company Name / Website / Domain / Industry / Company Size / Headquarters ----
+                    st.header(parsed.company.name)
+                    st.write(parsed.company.description)
+
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Website / Domain", parsed.company.domain or "Unknown")
+                    c1.metric("Industry", parsed.company.industry)
+                    c2.metric("Company Size", f"{parsed.company.employee_count} employees" if parsed.company.employee_count else "Unknown")
+                    c2.metric("Headquarters", parsed.company.headquarters)
+                    c3.metric("Founded", parsed.company.founded_year or "Unknown")
+
+                    st.divider()
+
+                    # ---- Technology Stack (formatted, not JSON) ----
+                    st.subheader("Technology Stack")
+                    ts = parsed.tech_stack
+                    tcol1, tcol2 = st.columns(2)
+                    tcol1.write(f"**CRM:** {ts.crm or 'Unknown'}")
+                    tcol1.write(f"**Marketing Automation:** {ts.marketing_automation or 'Unknown'}")
+                    tcol2.write(f"**Website Platform:** {ts.website_platform or 'Unknown'}")
+                    tcol2.write(f"**Analytics:** {ts.analytics or 'Unknown'}")
+
+                    st.divider()
+
+                    # ---- Leadership (formatted, not JSON) ----
+                    st.subheader("Leadership")
+                    if parsed.leadership:
+                        for leader in parsed.leadership:
+                            st.write(f"- **{leader.name}** — {leader.title}")
+                    else:
+                        st.write("No leadership identified.")
+
+                    st.divider()
+
+                    # ---- Business Signals ----
+                    st.subheader("Business Signals")
+                    if parsed.business_signals:
+                        for signal in parsed.business_signals:
+                            st.write(f"- {signal}")
+                    else:
+                        st.write("No business signals identified.")
+
+                    st.divider()
+
+                    # ---- Key Signals Observed (from whatever input you provided) ----
+                    st.subheader("Key Signals Observed")
+                    any_signal_shown = False
+                    if ip_address.strip():
+                        st.write(f"- IP address provided: {ip_address.strip()}")
+                        any_signal_shown = True
+                    if location.strip():
+                        st.write(f"- Location: {location.strip()}")
+                        any_signal_shown = True
+                    if pages_visited:
+                        st.write(f"- Visited: {', '.join(pages_visited)}")
+                        any_signal_shown = True
+                    if visits_this_week:
+                        st.write(f"- {visits_this_week} visit(s) this week")
+                        any_signal_shown = True
+                    if time_on_site:
+                        st.write(f"- {time_on_site} seconds on site")
+                        any_signal_shown = True
+                    if referral_source:
+                        st.write(f"- Referral source: {referral_source}")
+                        any_signal_shown = True
+                    if device:
+                        st.write(f"- Device: {device}")
+                        any_signal_shown = True
+                    if not any_signal_shown:
+                        st.write("No visitor signals provided — this result is based on company name only.")
+
+                    st.divider()
+
+                    # ---- Likely Persona / Intent Score / Intent Stage ----
+                    st.subheader("Intent")
+                    icol1, icol2 = st.columns(2)
+                    icol1.metric("Intent Score", f"{parsed.intent.score} / 10")
+                    icol2.metric("Intent Stage", parsed.intent.stage.value)
+                    st.write(
+                        f"Likely Persona: **{parsed.persona.likely_role}** "
+                        f"({round(parsed.persona.confidence * 100)}% confidence)"
+                    )
+
+                    st.divider()
+
+                    # ---- AI Summary ----
+                    st.subheader("AI Summary")
+                    st.write(parsed.ai_summary)
+
+                    # ---- Recommended Sales Action ----
+                    st.subheader("Recommended Sales Action")
+                    st.write(parsed.recommended_action.summary)
+                    for step in parsed.recommended_action.next_steps:
+                        st.write(f"- {step}")
+
+                    st.info(parsed.confidence_notes)
+
+            except Exception as e:
+                st.error(f"Something went wrong: {e}")
+                st.caption("If this mentions a rate limit (429), wait ~30-60s, "
+                           "or switch the model in the sidebar.")

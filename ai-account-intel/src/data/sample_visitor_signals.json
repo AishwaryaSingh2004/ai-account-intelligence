@@ -1,0 +1,45 @@
+{
+  "_note": "Visitor behavior fixtures. Categories starting with _ are ignored by run_tests.py.",
+  "high_intent": {
+    "visitor_id": "v-001",
+    "pages_visited": ["/pricing", "/enterprise", "/demo-request", "/case-studies/saas"],
+    "time_on_site_seconds": 780,
+    "visits_this_week": 5,
+    "referral_source": "google search: account intelligence pricing",
+    "device": "desktop",
+    "location": "Seattle, WA"
+  },
+  "medium_intent": {
+    "visitor_id": "v-002",
+    "pages_visited": ["/blog/what-is-account-intelligence", "/product"],
+    "time_on_site_seconds": 240,
+    "visits_this_week": 2,
+    "referral_source": "linkedin",
+    "device": "desktop",
+    "location": "Austin, TX"
+  },
+  "low_intent": {
+    "visitor_id": "v-003",
+    "pages_visited": ["/blog/industry-trends-2026"],
+    "time_on_site_seconds": 45,
+    "visits_this_week": 1,
+    "referral_source": "twitter",
+    "device": "mobile",
+    "location": "London, UK"
+  },
+  "empty_signals": {
+    "visitor_id": "v-004",
+    "pages_visited": [],
+    "time_on_site_seconds": 0,
+    "visits_this_week": 0
+  },
+  "nonsense_signals": {
+    "visitor_id": "v-005",
+    "pages_visited": ["asdfgh", "///", "🦄🦄🦄"],
+    "time_on_site_seconds": -50,
+    "visits_this_week": 9999,
+    "referral_source": "unknown",
+    "device": "toaster",
+    "location": ""
+  }
+}
