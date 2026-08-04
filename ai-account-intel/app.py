@@ -99,7 +99,7 @@ if analyze_clicked:
                     st.error(f"Model output did not match expected schema:\n\n{error}")
                 else:
                     st.session_state.parsed = parsed
-                    st.session_state.qna_history = []
+                    st.session_state.qna_history = {}
 # Catch-all error handling
             except Exception as e:
                 st.error(f"Something went wrong: {e}")
@@ -245,11 +245,13 @@ if "parsed" in st.session_state:
         with st.spinner("Thinking..."):
             try:
                 answer = run_qna(question_to_ask, parsed.model_dump(), model=model_choice)
-                st.session_state.qna_history.append((question_to_ask, answer))
+                dedup_key = question_to_ask.strip().lower()
+                st.session_state.qna_history.pop(dedup_key, None)  # re-asking replaces, not duplicates
+                st.session_state.qna_history[dedup_key] = (question_to_ask.strip(), answer)
             except Exception as e:
                 st.error(f"Something went wrong answering that: {e}")
 
-    for q, a in reversed(st.session_state.get("qna_history", [])):
+    for q, a in reversed(list(st.session_state.get("qna_history", {}).values())):
         st.markdown(f"**Q: {q}**")
         st.write(a)
         st.write("")
