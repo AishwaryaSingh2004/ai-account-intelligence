@@ -62,6 +62,8 @@ with st.expander("Add visitor behavior (optional)", expanded=False):
 
 analyze_clicked = st.button("Analyze", type="primary")
 
+pages_visited = [p.strip() for p in pages_visited_raw.split("\n") if p.strip()] if pages_visited_raw else []
+
 # ---------- RUN + RENDER ----------
 if analyze_clicked:
     has_identity_input = bool(company_name.strip()) or bool(ip_address.strip()) or bool(location.strip())
@@ -69,7 +71,6 @@ if analyze_clicked:
     if not has_identity_input:
         st.error("Enter a company name, OR an IP address / location for anonymous-visitor identification.")
     else:
-        pages_visited = [p.strip() for p in pages_visited_raw.split("\n") if p.strip()] if pages_visited_raw else []
         has_behavior_data = bool(pages_visited or time_on_site or visits_this_week or referral_source or device)
 
         visitor_signals = None
