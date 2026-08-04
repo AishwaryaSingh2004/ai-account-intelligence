@@ -110,6 +110,10 @@ if analyze_clicked:
 # ---------- RESULTS + AI RESEARCH AGENT (persisted across reruns, e.g. when asking a question) ----------
 if "parsed" in st.session_state:
     parsed = st.session_state.parsed
+    if not hasattr(parsed, "risks"):
+        del st.session_state["parsed"]  # stale object from before a schema change
+        st.info("This app was updated since your last analysis — please click Analyze again.")
+        st.stop()
     if not isinstance(st.session_state.get("qna_history"), dict):
         st.session_state.qna_history = {}  # heal stale sessions carrying the old list format
     st.divider()

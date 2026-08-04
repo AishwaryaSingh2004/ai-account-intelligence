@@ -24,7 +24,8 @@ def get_client():
 
 def call_agent(system_prompt: str, user_prompt: str, model: str = None) -> dict:
     """Calls Gemini with JSON mode enabled. Retries on free-tier rate limits
-    using settings from config.py — no numbers hardcoded here."""
+    and on truncated/malformed JSON output (both transient) using settings
+    from config.py — no numbers hardcoded here."""
     client = get_client()
     active_model = model or config.GEMINI_MODEL
     generation_config = types.GenerateContentConfig(
@@ -33,30 +34,30 @@ def call_agent(system_prompt: str, user_prompt: str, model: str = None) -> dict:
         max_output_tokens=config.MAX_OUTPUT_TOKENS,
     )
 
+    def generate(model_name):
+        response = client.models.generate_content(
+            model=model_name,
+            contents=user_prompt,
+            config=generation_config,
+        )
+        return json.loads(response.text)
+
     last_error = None
     for attempt in range(config.MAX_RETRIES):
         try:
-            response = client.models.generate_content(
-                model=active_model,
-                contents=user_prompt,
-                config=generation_config,
-            )
-            return json.loads(response.text)
+            return generate(active_model)
+        except json.JSONDecodeError as e:
+            last_error = e
+            time.sleep(config.RETRY_BASE_WAIT_SECONDS * (attempt + 1))
         except Exception as e:
             last_error = e
             if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                wait = config.RETRY_BASE_WAIT_SECONDS * (attempt + 1)
-                time.sleep(wait)
+                time.sleep(config.RETRY_BASE_WAIT_SECONDS * (attempt + 1))
             else:
                 raise
     if active_model != config.GEMINI_FALLBACK_MODEL:
         try:
-            response = client.models.generate_content(
-                model=config.GEMINI_FALLBACK_MODEL,
-                contents=user_prompt,
-                config=generation_config,
-            )
-            return json.loads(response.text)
+            return generate(config.GEMINI_FALLBACK_MODEL)
         except Exception as e:
             last_error = e
     raise RuntimeError(f"Failed after {config.MAX_RETRIES} retries: {last_error}")
