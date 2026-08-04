@@ -163,38 +163,6 @@ next step before outreach."""
     return call_agent(system, user, model)
 
 
-def run_risk_analyst(company_profile: dict, scoring: dict, model: str = None) -> dict:
-    """Assesses a fixed set of account-risk categories from the company profile
-    and visitor scoring data — flags that matter to a salesperson deciding
-    whether/how hard to pursue an account."""
-    system = """You are a B2B account risk analyst. Given a company profile and
-visitor/intent scoring data, assess exactly these five risk categories for this
-account. Return ONLY valid JSON matching this schema, and nothing else:
-{
-  "employee_turnover": {"level": "Low", "explanation": ""},
-  "funding_slowdown": {"level": "Low", "explanation": ""},
-  "negative_news": {"level": "Low", "explanation": ""},
-  "declining_hiring": {"level": "Low", "explanation": ""},
-  "low_buying_intent": {"level": "Low", "explanation": ""}
-}
-
-Rules:
-- "level" must be exactly one of "Low", "Medium", "High".
-- Base each assessment on real signals in the company profile and scoring data
-  (industry, company size/stage, business_signals, intent score/stage) where
-  available. If there's no direct evidence for a category, infer a reasonable
-  baseline for a company of this profile/industry and say plainly in the
-  explanation that it's an inferred baseline, not observed evidence — never
-  default everything to "Low" with no reasoning.
-- "low_buying_intent" must specifically reference the visitor's intent score
-  and stage from the scoring data: score 7-10 / stage Decision or Evaluation
-  should be "Low" risk; score 4-6 should be "Medium"; score 0-3 / stage
-  Awareness should be "High" risk.
-- Keep each explanation to one concise sentence."""
-    user = f"Company profile: {json.dumps(company_profile)}\nScoring: {json.dumps(scoring)}"
-    return call_agent(system, user, model)
-
-
 def run_qna(question: str, account_intel: dict, model: str = None) -> str:
     """Answers a free-form sales question grounded in one account's already-
     generated intelligence (company profile, tech stack, persona, intent,
@@ -237,7 +205,6 @@ def run_full_pipeline(
     scorer_output = run_scorer(signals_for_scoring, model)
 
     strategist_output = run_strategist(researcher_output, scorer_output, model)
-    risk_output = run_risk_analyst(researcher_output, scorer_output, model)
 
     return {
         "company": researcher_output["company"],
@@ -248,6 +215,5 @@ def run_full_pipeline(
         "intent": scorer_output["intent"],
         "ai_summary": strategist_output["ai_summary"],
         "recommended_action": strategist_output["recommended_action"],
-        "risks": risk_output,
         "confidence_notes": strategist_output["confidence_notes"],
     }

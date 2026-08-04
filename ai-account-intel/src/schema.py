@@ -46,25 +46,6 @@ class RecommendedAction(BaseModel):
     next_steps: List[str]
 
 
-class RiskLevel(str, Enum):
-    LOW = "Low"
-    MEDIUM = "Medium"
-    HIGH = "High"
-
-
-class Risk(BaseModel):
-    level: RiskLevel
-    explanation: str
-
-
-class RiskAnalysis(BaseModel):
-    employee_turnover: Risk
-    funding_slowdown: Risk
-    negative_news: Risk
-    declining_hiring: Risk
-    low_buying_intent: Risk
-
-
 class AccountIntel(BaseModel):
     company: Company
     tech_stack: TechStack
@@ -74,7 +55,6 @@ class AccountIntel(BaseModel):
     intent: Intent
     ai_summary: str
     recommended_action: RecommendedAction
-    risks: RiskAnalysis
     confidence_notes: str
 
 

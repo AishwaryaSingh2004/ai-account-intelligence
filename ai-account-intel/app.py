@@ -198,23 +198,6 @@ if "parsed" in st.session_state:
 
     st.divider()
 
-    # ---- Risk Analysis (AI-predicted account risks) ----
-    st.subheader("⚠️ Risk Analysis")
-    risk_badge = {"Low": "🟢", "Medium": "🟡", "High": "🔴"}
-    risk_labels = {
-        "employee_turnover": "High employee turnover",
-        "funding_slowdown": "Funding slowdown",
-        "negative_news": "Negative news",
-        "declining_hiring": "Declining hiring",
-        "low_buying_intent": "Low buying intent",
-    }
-    for field, label in risk_labels.items():
-        risk = getattr(parsed.risks, field)
-        st.write(f"{risk_badge[risk.level.value]} **{label} — {risk.level.value}**")
-        st.caption(risk.explanation)
-
-    st.divider()
-
     # ---- AI Summary ----
     st.subheader("AI Summary")
     st.write(parsed.ai_summary)
