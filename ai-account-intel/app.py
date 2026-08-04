@@ -1,12 +1,12 @@
 import streamlit as st
 
 from src import config
-from src.agents import run_full_pipeline
+from src.agents import run_full_pipeline, run_qna
 from src.validate import validate_intel
 
 st.set_page_config(page_title="AI Account Intelligence", layout="wide")
 
-# ---------- SIDEBAR: live configuration, nothing hardcoded ----------
+# ---------- SIDEBAR: live configuration, nothing hardcoded , checks for API key ----------
 st.sidebar.title("Settings")
 
 if not config.has_valid_key():
@@ -97,106 +97,158 @@ if analyze_clicked:
                 if error:
                     st.error(f"Model output did not match expected schema:\n\n{error}")
                 else:
-                    st.divider()
-
-                    # ---- Company Name / Website / Domain / Industry / Company Size / Headquarters ----
-                    st.header(parsed.company.name)
-                    st.write(parsed.company.description)
-
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("Website / Domain", parsed.company.domain or "Unknown")
-                    c1.metric("Industry", parsed.company.industry)
-                    c2.metric("Company Size", f"{parsed.company.employee_count} employees" if parsed.company.employee_count else "Unknown")
-                    c2.metric("Headquarters", parsed.company.headquarters)
-                    c3.metric("Founded", parsed.company.founded_year or "Unknown")
-
-                    st.divider()
-
-                    # ---- Technology Stack (formatted, not JSON) ----
-                    st.subheader("Technology Stack")
-                    ts = parsed.tech_stack
-                    tcol1, tcol2 = st.columns(2)
-                    tcol1.write(f"**CRM:** {ts.crm or 'Unknown'}")
-                    tcol1.write(f"**Marketing Automation:** {ts.marketing_automation or 'Unknown'}")
-                    tcol2.write(f"**Website Platform:** {ts.website_platform or 'Unknown'}")
-                    tcol2.write(f"**Analytics:** {ts.analytics or 'Unknown'}")
-
-                    st.divider()
-
-                    # ---- Leadership (formatted, not JSON) ----
-                    st.subheader("Leadership")
-                    if parsed.leadership:
-                        for leader in parsed.leadership:
-                            st.write(f"- **{leader.name}** — {leader.title}")
-                    else:
-                        st.write("No leadership identified.")
-
-                    st.divider()
-
-                    # ---- Business Signals ----
-                    st.subheader("Business Signals")
-                    if parsed.business_signals:
-                        for signal in parsed.business_signals:
-                            st.write(f"- {signal}")
-                    else:
-                        st.write("No business signals identified.")
-
-                    st.divider()
-
-                    # ---- Key Signals Observed (from whatever input you provided) ----
-                    st.subheader("Key Signals Observed")
-                    any_signal_shown = False
-                    if ip_address.strip():
-                        st.write(f"- IP address provided: {ip_address.strip()}")
-                        any_signal_shown = True
-                    if location.strip():
-                        st.write(f"- Location: {location.strip()}")
-                        any_signal_shown = True
-                    if pages_visited:
-                        st.write(f"- Visited: {', '.join(pages_visited)}")
-                        any_signal_shown = True
-                    if visits_this_week:
-                        st.write(f"- {visits_this_week} visit(s) this week")
-                        any_signal_shown = True
-                    if time_on_site:
-                        st.write(f"- {time_on_site} seconds on site")
-                        any_signal_shown = True
-                    if referral_source:
-                        st.write(f"- Referral source: {referral_source}")
-                        any_signal_shown = True
-                    if device:
-                        st.write(f"- Device: {device}")
-                        any_signal_shown = True
-                    if not any_signal_shown:
-                        st.write("No visitor signals provided — this result is based on company name only.")
-
-                    st.divider()
-
-                    # ---- Likely Persona / Intent Score / Intent Stage ----
-                    st.subheader("Intent")
-                    icol1, icol2 = st.columns(2)
-                    icol1.metric("Intent Score", f"{parsed.intent.score} / 10")
-                    icol2.metric("Intent Stage", parsed.intent.stage.value)
-                    st.write(
-                        f"Likely Persona: **{parsed.persona.likely_role}** "
-                        f"({round(parsed.persona.confidence * 100)}% confidence)"
-                    )
-
-                    st.divider()
-
-                    # ---- AI Summary ----
-                    st.subheader("AI Summary")
-                    st.write(parsed.ai_summary)
-
-                    # ---- Recommended Sales Action ----
-                    st.subheader("Recommended Sales Action")
-                    st.write(parsed.recommended_action.summary)
-                    for step in parsed.recommended_action.next_steps:
-                        st.write(f"- {step}")
-
-                    st.info(parsed.confidence_notes)
-
+                    st.session_state.parsed = parsed
+                    st.session_state.qna_history = []
+# Catch-all error handling
             except Exception as e:
                 st.error(f"Something went wrong: {e}")
                 st.caption("If this mentions a rate limit (429), wait ~30-60s, "
                            "or switch the model in the sidebar.")
+
+# ---------- RESULTS + AI RESEARCH AGENT (persisted across reruns, e.g. when asking a question) ----------
+if "parsed" in st.session_state:
+    parsed = st.session_state.parsed
+    st.divider()
+
+    # ---- Company Name / Website / Domain / Industry / Company Size / Headquarters ----
+    st.header(parsed.company.name)
+    st.write(parsed.company.description)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Website / Domain", parsed.company.domain or "Unknown")
+    c1.metric("Industry", parsed.company.industry)
+    c2.metric("Company Size", f"{parsed.company.employee_count} employees" if parsed.company.employee_count else "Unknown")
+    c2.metric("Headquarters", parsed.company.headquarters)
+    c3.metric("Founded", parsed.company.founded_year or "Unknown")
+
+    st.divider()
+
+    # ---- Technology Stack (formatted, not JSON) ----
+    st.subheader("Technology Stack")
+    ts = parsed.tech_stack
+    tcol1, tcol2 = st.columns(2)
+    tcol1.write(f"**CRM:** {ts.crm or 'Unknown'}")
+    tcol1.write(f"**Marketing Automation:** {ts.marketing_automation or 'Unknown'}")
+    tcol2.write(f"**Website Platform:** {ts.website_platform or 'Unknown'}")
+    tcol2.write(f"**Analytics:** {ts.analytics or 'Unknown'}")
+
+    st.divider()
+
+    # ---- Leadership (formatted, not JSON) ----
+    st.subheader("Leadership")
+    if parsed.leadership:
+        for leader in parsed.leadership:
+            st.write(f"- **{leader.name}** — {leader.title}")
+    else:
+        st.write("No leadership identified.")
+
+    st.divider()
+
+    # ---- Business Signals ----
+    st.subheader("Business Signals")
+    if parsed.business_signals:
+        for signal in parsed.business_signals:
+            st.write(f"- {signal}")
+    else:
+        st.write("No business signals identified.")
+
+    st.divider()
+
+    # ---- Key Signals Observed (from whatever input you provided) ----
+    st.subheader("Key Signals Observed")
+    any_signal_shown = False
+    if ip_address.strip():
+        st.write(f"- IP address provided: {ip_address.strip()}")
+        any_signal_shown = True
+    if location.strip():
+        st.write(f"- Location: {location.strip()}")
+        any_signal_shown = True
+    if pages_visited:
+        st.write(f"- Visited: {', '.join(pages_visited)}")
+        any_signal_shown = True
+    if visits_this_week:
+        st.write(f"- {visits_this_week} visit(s) this week")
+        any_signal_shown = True
+    if time_on_site:
+        st.write(f"- {time_on_site} seconds on site")
+        any_signal_shown = True
+    if referral_source:
+        st.write(f"- Referral source: {referral_source}")
+        any_signal_shown = True
+    if device:
+        st.write(f"- Device: {device}")
+        any_signal_shown = True
+    if not any_signal_shown:
+        st.write("No visitor signals provided — this result is based on company name only.")
+
+    st.divider()
+
+    # ---- Likely Persona / Intent Score / Intent Stage ----
+    st.subheader("Intent")
+    icol1, icol2 = st.columns(2)
+    icol1.metric("Intent Score", f"{parsed.intent.score} / 10")
+    icol2.metric("Intent Stage", parsed.intent.stage.value)
+    st.write(
+        f"Likely Persona: **{parsed.persona.likely_role}** "
+        f"({round(parsed.persona.confidence * 100)}% confidence)"
+    )
+
+    st.divider()
+
+    # ---- AI Summary ----
+    st.subheader("AI Summary")
+    st.write(parsed.ai_summary)
+
+    # ---- Recommended Sales Action ----
+    st.subheader("Recommended Sales Action")
+    st.write(parsed.recommended_action.summary)
+    for step in parsed.recommended_action.next_steps:
+        st.write(f"- {step}")
+
+    st.info(parsed.confidence_notes)
+
+    st.divider()
+
+    # ---- AI Research Agent: ask free-form questions grounded in this account's data ----
+    st.subheader("🔎 AI Research Agent")
+    st.caption("Instead of just displaying data, ask AI. Answers are grounded in the "
+               "account intelligence above.")
+
+    example_questions = [
+        "What is this company's biggest challenge?",
+        "How can we sell our product to them?",
+        "Who should I contact first?",
+        "What is the likelihood they'll buy?",
+        "Summarize this company in 30 seconds.",
+    ]
+    example_clicked = None
+    ex_cols = st.columns(len(example_questions))
+    for col, q in zip(ex_cols, example_questions):
+        if col.button(q, key=f"example_{q}"):
+            example_clicked = q
+
+    qcol1, qcol2 = st.columns([4, 1])
+    with qcol1:
+        custom_question = st.text_input(
+            "Ask AI a question about this account",
+            placeholder="e.g. What is this company's biggest challenge?",
+            key="qna_input",
+            label_visibility="collapsed",
+        )
+    with qcol2:
+        ask_clicked = st.button("Ask AI", type="primary", key="ask_ai_button")
+
+    question_to_ask = example_clicked or (custom_question.strip() if ask_clicked and custom_question.strip() else None)
+
+    if question_to_ask:
+        with st.spinner("Thinking..."):
+            try:
+                answer = run_qna(question_to_ask, parsed.model_dump(), model=model_choice)
+                st.session_state.qna_history.append((question_to_ask, answer))
+            except Exception as e:
+                st.error(f"Something went wrong answering that: {e}")
+
+    for q, a in reversed(st.session_state.get("qna_history", [])):
+        st.markdown(f"**Q: {q}**")
+        st.write(a)
+        st.write("")

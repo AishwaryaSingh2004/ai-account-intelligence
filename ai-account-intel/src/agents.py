@@ -1,7 +1,7 @@
 import json
 import time
 from google import genai
-from google.genai import types
+from google.genai import types        
 from src import config
 
 _client = None
@@ -161,6 +161,24 @@ say so plainly in confidence_notes and recommend identity confirmation as a
 next step before outreach."""
     user = f"Company profile: {json.dumps(company_profile)}\nScoring: {json.dumps(scoring)}"
     return call_agent(system, user, model)
+
+
+def run_qna(question: str, account_intel: dict, model: str = None) -> str:
+    """Answers a free-form sales question grounded in one account's already-
+    generated intelligence (company profile, tech stack, persona, intent,
+    recommended action, etc.) — no new research, just reasoning over that data."""
+    system = """You are a B2B sales research assistant. Answer the sales rep's
+question using ONLY the account intelligence data provided as context — do not
+invent facts it doesn't support. Be direct and concise (a few sentences, plain
+English, no filler, no restating the question). If the data doesn't contain
+enough information to answer confidently, say so plainly and note what's missing
+rather than guessing.
+
+Return ONLY valid JSON matching this schema, and nothing else:
+{"answer": ""}"""
+    user = f"Account intelligence:\n{json.dumps(account_intel)}\n\nQuestion: {question}"
+    result = call_agent(system, user, model)
+    return result.get("answer", "")
 
 
 def run_full_pipeline(
