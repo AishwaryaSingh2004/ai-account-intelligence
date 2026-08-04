@@ -3,6 +3,7 @@ import streamlit as st
 from src import config
 from src.agents import run_full_pipeline, run_qna
 from src.validate import validate_intel
+from src.report import build_pdf
 
 st.set_page_config(page_title="AI Account Intelligence", layout="wide")
 
@@ -114,7 +115,14 @@ if "parsed" in st.session_state:
     st.divider()
 
     # ---- Company Name / Website / Domain / Industry / Company Size / Headquarters ----
-    st.header(parsed.company.name)
+    hcol1, hcol2 = st.columns([5, 1])
+    hcol1.header(parsed.company.name)
+    hcol2.download_button(
+        "📄 Download PDF",
+        data=build_pdf(parsed),
+        file_name=f"{parsed.company.name.replace(' ', '_')}_account_intel.pdf",
+        mime="application/pdf",
+    )
     st.write(parsed.company.description)
 
     c1, c2, c3 = st.columns(3)

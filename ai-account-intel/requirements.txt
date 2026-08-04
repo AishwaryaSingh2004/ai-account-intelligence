@@ -3,3 +3,4 @@ pydantic
 streamlit
 python-dotenv
 pandas
+fpdf2
