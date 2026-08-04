@@ -7,25 +7,8 @@ from src.report import build_pdf
 
 st.set_page_config(page_title="AI Account Intelligence", layout="wide")
 
-# ---------- SIDEBAR: live configuration, nothing hardcoded , checks for API key ----------
-st.sidebar.title("Settings")
-
-if not config.has_valid_key():
-    st.sidebar.error("No GEMINI_API_KEY found. Add one to .env (local) or "
-                      "Streamlit secrets (deployed).")
-else:
-    st.sidebar.success("Gemini API key loaded.")
-
-model_choice = st.sidebar.selectbox(
-    "Model",
-    options=[config.GEMINI_MODEL, config.GEMINI_FALLBACK_MODEL],
-    index=0,
-    help="Switch to the fallback/lite model if you hit rate limits.",
-)
-st.sidebar.caption(f"Max retries: {config.MAX_RETRIES} · "
-                   f"Retry base wait: {config.RETRY_BASE_WAIT_SECONDS}s · "
-                   f"Batch delay: {config.BATCH_DELAY_SECONDS}s")
-st.sidebar.caption("Change any of these in your .env file — no code edits needed.")
+# ---------- CONFIG: driven by .env / Streamlit secrets, no customer-facing settings panel ----------
+model_choice = config.GEMINI_MODEL
 
 st.title("AI Account Intelligence")
 st.caption("Enter a company name, OR an IP address with no name at all (simulated "
