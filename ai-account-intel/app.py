@@ -109,6 +109,8 @@ if analyze_clicked:
 # ---------- RESULTS + AI RESEARCH AGENT (persisted across reruns, e.g. when asking a question) ----------
 if "parsed" in st.session_state:
     parsed = st.session_state.parsed
+    if not isinstance(st.session_state.get("qna_history"), dict):
+        st.session_state.qna_history = {}  # heal stale sessions carrying the old list format
     st.divider()
 
     # ---- Company Name / Website / Domain / Industry / Company Size / Headquarters ----
