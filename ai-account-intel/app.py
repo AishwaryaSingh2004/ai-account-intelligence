@@ -227,28 +227,13 @@ if "parsed" in st.session_state:
         )
 
     st.markdown(f"""
-<details>
-    <summary style="font-size: 1.75rem; font-weight: 600; color: #fafafa; cursor: pointer;
-                     display: inline-block; list-style-position: outside;">
-        Intent
-    </summary>
-    <div style="margin-top: 8px; margin-bottom: 4px; max-width: 480px; background-color: #262730;
-                color: #fafafa; border-radius: 6px; padding: 10px 12px; font-size: 13px; line-height: 1.4;">
-        {html.escape(intent_help)}
-    </div>
-</details>
-""", unsafe_allow_html=True)
-
-    icol1, icol2 = st.columns(2)
-    with icol1:
-        st.markdown(f"""
 <style>
-.intent-score-tooltip {{
+.intent-heading-tooltip {{
     position: relative;
     display: inline-block;
     cursor: help;
 }}
-.intent-score-tooltip .tooltip-text {{
+.intent-heading-tooltip .tooltip-text {{
     visibility: hidden;
     opacity: 0;
     transition: opacity 0.15s;
@@ -267,17 +252,19 @@ if "parsed" in st.session_state:
     line-height: 1.4;
     box-shadow: 0 2px 8px rgba(0,0,0,0.4);
 }}
-.intent-score-tooltip:hover .tooltip-text {{
+.intent-heading-tooltip:hover .tooltip-text {{
     visibility: visible;
     opacity: 1;
 }}
 </style>
-<div class="intent-score-tooltip">
-    <div style="font-size: 14px; color: rgba(250,250,250,0.6);">Intent Score</div>
-    <div style="font-size: 2.25rem; font-weight: 600; color: #fafafa;">{parsed.intent.score} / 10</div>
+<div class="intent-heading-tooltip">
+    <span style="font-size: 1.75rem; font-weight: 600; color: #fafafa;">Intent</span>
     <span class="tooltip-text">{html.escape(intent_help)}</span>
 </div>
 """, unsafe_allow_html=True)
+
+    icol1, icol2 = st.columns(2)
+    icol1.metric("Intent Score", f"{parsed.intent.score} / 10")
     icol2.metric("Intent Stage", parsed.intent.stage.value)
     st.write(
         f"Likely Persona: **{parsed.persona.likely_role}** "
