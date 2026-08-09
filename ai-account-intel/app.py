@@ -88,8 +88,7 @@ if analyze_clicked:
 # Catch-all error handling
             except Exception as e:
                 st.error(f"Something went wrong: {e}")
-                st.caption("If this mentions a rate limit (429), wait ~30-60s, "
-                           "or switch the model in the sidebar.")
+                st.caption("If this mentions a rate limit (429), wait ~30-60s and try again.")
 
 # ---------- RESULTS + AI RESEARCH AGENT (persisted across reruns, e.g. when asking a question) ----------
 if "parsed" in st.session_state:
