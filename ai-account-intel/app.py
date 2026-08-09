@@ -201,8 +201,6 @@ if "parsed" in st.session_state:
     st.divider()
 
     # ---- Likely Persona / Intent Score / Intent Stage ----
-    st.subheader("Intent")
-
     intent_signal_parts = []
     if pages_visited:
         intent_signal_parts.append(f"{len(pages_visited)} page(s) visited ({', '.join(pages_visited)})")
@@ -227,6 +225,19 @@ if "parsed" in st.session_state:
             "company profile alone. Add pages visited, visits this week, and time on site above "
             "for a behavior-based score."
         )
+
+    st.markdown(f"""
+<details>
+    <summary style="font-size: 1.75rem; font-weight: 600; color: #fafafa; cursor: pointer;
+                     display: inline-block; list-style-position: outside;">
+        Intent
+    </summary>
+    <div style="margin-top: 8px; margin-bottom: 4px; max-width: 480px; background-color: #262730;
+                color: #fafafa; border-radius: 6px; padding: 10px 12px; font-size: 13px; line-height: 1.4;">
+        {html.escape(intent_help)}
+    </div>
+</details>
+""", unsafe_allow_html=True)
 
     icol1, icol2 = st.columns(2)
     with icol1:
