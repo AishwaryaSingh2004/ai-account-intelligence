@@ -201,8 +201,34 @@ if "parsed" in st.session_state:
 
     # ---- Likely Persona / Intent Score / Intent Stage ----
     st.subheader("Intent")
+
+    intent_signal_parts = []
+    if pages_visited:
+        intent_signal_parts.append(f"{len(pages_visited)} page(s) visited ({', '.join(pages_visited)})")
+    if visits_this_week:
+        intent_signal_parts.append(f"{visits_this_week} visit(s) this week")
+    if time_on_site:
+        intent_signal_parts.append(f"{time_on_site} second(s) on site")
+    if referral_source:
+        intent_signal_parts.append(f"referred via {referral_source}")
+    if device:
+        intent_signal_parts.append(f"{device} device")
+
+    if intent_signal_parts:
+        intent_help = (
+            "Calculated from this visitor's browsing behavior — " + "; ".join(intent_signal_parts) +
+            ". More pages (especially pricing/demo), more visits this week, and more time on site "
+            "push the score higher and move the stage further down the funnel."
+        )
+    else:
+        intent_help = (
+            "No visitor behavior was provided for this analysis, so this score is based on the "
+            "company profile alone. Add pages visited, visits this week, and time on site above "
+            "for a behavior-based score."
+        )
+
     icol1, icol2 = st.columns(2)
-    icol1.metric("Intent Score", f"{parsed.intent.score} / 10")
+    icol1.metric("Intent Score", f"{parsed.intent.score} / 10", help=intent_help)
     icol2.metric("Intent Stage", parsed.intent.stage.value)
     st.write(
         f"Likely Persona: **{parsed.persona.likely_role}** "
