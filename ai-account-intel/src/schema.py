@@ -65,6 +65,17 @@ class RiskAnalysis(BaseModel):
     low_buying_intent: Risk
 
 
+class NewsItem(BaseModel):
+    headline: str
+    summary: str
+    date: Optional[str] = None
+
+
+class Source(BaseModel):
+    title: str
+    url: str
+
+
 class AccountIntel(BaseModel):
     company: Company
     tech_stack: TechStack
@@ -75,6 +86,8 @@ class AccountIntel(BaseModel):
     ai_summary: str
     recommended_action: RecommendedAction
     risks: RiskAnalysis
+    recent_news: List[NewsItem] = []
+    sources: List[Source] = []
     confidence_notes: str
 
 

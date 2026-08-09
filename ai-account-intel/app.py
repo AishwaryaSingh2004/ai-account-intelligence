@@ -150,7 +150,25 @@ if "parsed" in st.session_state:
     else:
         st.write("No business signals identified.")
 
+    sources = getattr(parsed, "sources", [])
+    if sources:
+        st.caption("Sources (to verify the above):")
+        for src in sources:
+            st.caption(f"- [{src.title}]({src.url})")
+
     st.divider()
+
+    # ---- Recent News (useful for marketing/outreach) ----
+    recent_news = getattr(parsed, "recent_news", [])
+    if recent_news:
+        st.subheader("📰 Recent News")
+        st.caption("Live search results — useful for marketing and outreach.")
+        for item in recent_news:
+            date_suffix = f" ({item.date})" if item.date else ""
+            st.write(f"**{item.headline}**{date_suffix}")
+            st.write(item.summary)
+
+        st.divider()
 
     # ---- Key Signals Observed (from whatever input you provided) ----
     st.subheader("Key Signals Observed")

@@ -196,6 +196,76 @@ Rules:
     return call_agent(system, user, model)
 
 
+def run_news_and_sources(company_name: str, domain: str = None, model: str = None) -> dict:
+    """Uses live Google Search grounding to find real, recent news about the
+    company and real source links a salesperson/marketer can use to verify
+    the account data — separate from the other agents because Gemini's JSON
+    response-schema mode isn't supported together with the search tool, so
+    this call asks for raw JSON in the prompt and parses it manually.
+
+    Best-effort: search grounding isn't always available on free-tier keys
+    (it can hit its own quota independent of the other calls), so callers
+    should treat failures here as "no news found" rather than fatal."""
+    client = get_client()
+    active_model = model or config.GEMINI_MODEL
+    system = """You are a B2B research assistant with access to live Google Search.
+Find real, recent news about the given company, and real source links a
+salesperson or marketer could use to verify facts about the company.
+
+Return ONLY raw JSON (no markdown, no code fences, no commentary) matching
+exactly this schema:
+{
+  "recent_news": [{"headline": "", "summary": "", "date": ""}],
+  "sources": [{"title": "", "url": ""}]
+}
+
+Rules:
+- "recent_news": up to 5 real, dated news items from roughly the last 12
+  months if available (funding, leadership changes, product launches,
+  expansion, layoffs, notable press) — written to be useful for a marketing
+  team crafting outreach. If you genuinely find no recent news, return an
+  empty list — never invent items.
+- "sources": real URLs you actually found via search (company site, news
+  articles, LinkedIn, Crunchbase, etc.) that back up who this company is —
+  never invented URLs.
+- "date" should be an approximate date or time frame (e.g. "2026-03" or
+  "March 2026") if known, else an empty string."""
+    domain_note = f" (domain: {domain})" if domain else ""
+    user = f'Company: "{company_name}"{domain_note}. Find recent news and verification sources.'
+
+    generation_config = types.GenerateContentConfig(
+        system_instruction=system,
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+        max_output_tokens=config.MAX_OUTPUT_TOKENS,
+    )
+    response = client.models.generate_content(
+        model=active_model, contents=user, config=generation_config,
+    )
+    text = response.text.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+    result = json.loads(text)
+    result.setdefault("recent_news", [])
+    result.setdefault("sources", [])
+
+    # Merge in the real grounding source URLs Google Search actually used,
+    # in case the model didn't already list them under "sources".
+    known_urls = {s.get("url") for s in result["sources"]}
+    try:
+        chunks = response.candidates[0].grounding_metadata.grounding_chunks or []
+        for chunk in chunks:
+            web = getattr(chunk, "web", None)
+            if web and web.uri and web.uri not in known_urls:
+                result["sources"].append({"title": web.title or web.uri, "url": web.uri})
+                known_urls.add(web.uri)
+    except Exception:
+        pass
+
+    return result
+
+
 def run_qna(question: str, account_intel: dict, model: str = None) -> str:
     """Answers a free-form sales question grounded in one account's already-
     generated intelligence (company profile, tech stack, persona, intent,
@@ -251,6 +321,17 @@ def run_full_pipeline(
     strategist_output = run_strategist(researcher_output, scorer_output, model)
     risk_output = run_risk_analyst(researcher_output, scorer_output, model)
 
+    try:
+        news_output = run_news_and_sources(
+            researcher_output["company"]["name"],
+            researcher_output["company"].get("domain"),
+            model,
+        )
+    except Exception:
+        # Search grounding has its own quota separate from the other calls —
+        # degrade to "no news found" rather than failing the whole pipeline.
+        news_output = {"recent_news": [], "sources": []}
+
     return {
         "company": researcher_output["company"],
         "tech_stack": researcher_output["tech_stack"],
@@ -261,5 +342,7 @@ def run_full_pipeline(
         "ai_summary": strategist_output["ai_summary"],
         "recommended_action": strategist_output["recommended_action"],
         "risks": risk_output,
+        "recent_news": news_output.get("recent_news", []),
+        "sources": news_output.get("sources", []),
         "confidence_notes": strategist_output["confidence_notes"],
     }

@@ -74,7 +74,19 @@ def build_pdf(parsed) -> bytes:
             bullet(signal)
     else:
         body("No business signals identified.")
+    sources = getattr(parsed, "sources", [])
+    if sources:
+        for src in sources:
+            bullet(f"Source: {src.title} - {src.url}")
     pdf.ln(2)
+
+    recent_news = getattr(parsed, "recent_news", [])
+    if recent_news:
+        heading("Recent News")
+        for item in recent_news:
+            date_suffix = f" ({item.date})" if item.date else ""
+            body(f"{item.headline}{date_suffix}: {item.summary}")
+        pdf.ln(2)
 
     heading("Intent")
     body(f"Intent Score: {parsed.intent.score} / 10   |   Stage: {parsed.intent.stage.value}")
