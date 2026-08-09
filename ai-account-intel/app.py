@@ -1,3 +1,4 @@
+import html
 import streamlit as st
 
 from src import config
@@ -228,7 +229,44 @@ if "parsed" in st.session_state:
         )
 
     icol1, icol2 = st.columns(2)
-    icol1.metric("Intent Score", f"{parsed.intent.score} / 10", help=intent_help)
+    with icol1:
+        st.markdown(f"""
+<style>
+.intent-score-tooltip {{
+    position: relative;
+    display: inline-block;
+    cursor: help;
+}}
+.intent-score-tooltip .tooltip-text {{
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.15s;
+    position: absolute;
+    z-index: 100;
+    top: 100%;
+    left: 0;
+    margin-top: 6px;
+    width: 340px;
+    background-color: #262730;
+    color: #fafafa;
+    text-align: left;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 1.4;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}}
+.intent-score-tooltip:hover .tooltip-text {{
+    visibility: visible;
+    opacity: 1;
+}}
+</style>
+<div class="intent-score-tooltip">
+    <div style="font-size: 14px; color: rgba(250,250,250,0.6);">Intent Score</div>
+    <div style="font-size: 2.25rem; font-weight: 600; color: #fafafa;">{parsed.intent.score} / 10</div>
+    <span class="tooltip-text">{html.escape(intent_help)}</span>
+</div>
+""", unsafe_allow_html=True)
     icol2.metric("Intent Stage", parsed.intent.stage.value)
     st.write(
         f"Likely Persona: **{parsed.persona.likely_role}** "
