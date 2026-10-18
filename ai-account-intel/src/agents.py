@@ -22,7 +22,7 @@ def get_client():
     return _client
 
 
-def call_agent(system_prompt: str, user_prompt: str, model: str = None) -> dict:
+def call_agent(system_prompt: str, user_prompt: str, model: str = None, temperature: float = None) -> dict:
     """Calls Gemini with JSON mode enabled. Retries on free-tier rate limits
     and on truncated/malformed JSON output (both transient) using settings
     from config.py — no numbers hardcoded here."""
@@ -32,6 +32,7 @@ def call_agent(system_prompt: str, user_prompt: str, model: str = None) -> dict:
         system_instruction=system_prompt,
         response_mime_type="application/json",
         max_output_tokens=config.MAX_OUTPUT_TOKENS,
+        temperature=temperature,
     )
 
     def generate(model_name):
@@ -104,7 +105,16 @@ Rules:
   location and any other signals.
 - If you cannot verify a field, make a reasonable inference rather than
   leaving it blank, and note uncertainty in business_signals or description
-  instead of inventing false precision."""
+  instead of inventing false precision.
+- Never claim you performed a lookup you cannot perform (WHOIS, reverse DNS,
+  database checks). Phrase IP-based findings as inferences ("likely", "appears").
+- Use null for any field you have no basis for (domain, employee_count,
+  founded_year, tech_stack values) rather than "N/A", "unknown" or 0, and
+  return an empty leadership list rather than placeholder people.
+- Only list leaders you are confident really hold that role at this specific
+  company (e.g. widely reported executives of well-known companies). For small,
+  obscure or unfamiliar companies, return an empty leadership list. Never make
+  up names."""
 
     if company_name and company_name.strip():
         user = f'Company name: "{company_name}". Partial domain: {partial_domain or "none provided"}.'
@@ -134,7 +144,8 @@ IMPORTANT ON SCORING:
   "persona.confidence", which IS 0 to 1.
 - Strong signals (pricing page visits, product/demo pages, case studies,
   3+ visits in a week, 2+ minutes on site) should score in the 7-9 range,
-  matching stage "Evaluation" or "Decision".
+  stage "Evaluation"; 9+ only with explicit buying actions (demo request,
+  contact sales, trial signup) plus repeat visits, stage "Decision".
 - Moderate signals (1-2 relevant pages, 1-2 visits) should score 4-6,
   stage "Evaluation".
 - Weak/no signals (no pages, single short visit, blog-only browsing)
@@ -143,7 +154,53 @@ IMPORTANT ON SCORING:
   222 seconds on site -> score should be around 8.0-8.5, stage "Evaluation".
 "stage" must be exactly one of: "Awareness", "Evaluation", "Decision"."""
     user = f"Visitor signals: {json.dumps(visitor_signals)}"
-    return call_agent(system, user, model)
+    # Temperature 0 so the same behavior always gets the same score.
+    result = call_agent(system, user, model, temperature=0)
+    intent = result.get("intent", {})
+    score = max(0.0, min(10.0, float(intent.get("score", 0))))
+    intent["score"] = round(score, 1)
+    intent["stage"] = stage_for_score(score)
+    return result
+
+
+def stage_for_score(score: float) -> str:
+    """The funnel stage is derived from the score with fixed cutoffs, so the
+    two can never disagree (the model alone sometimes gave one score two
+    different stages across runs)."""
+    if score < 4:
+        return "Awareness"
+    if score < 9:
+        return "Evaluation"
+    return "Decision"
+
+
+_PLACEHOLDERS = {"", "n/a", "na", "none", "null", "unknown", "not available", "-"}
+
+
+def _blank(value):
+    return value is None or (isinstance(value, str) and value.strip().lower() in _PLACEHOLDERS)
+
+
+def clean_research(r: dict) -> dict:
+    """Turns the model's placeholder values ("N/A", "unknown", 0) into real
+    blanks so the UI and PDF show "Unknown" instead of fake data."""
+    company = r.get("company", {})
+    for key in ("domain",):
+        if _blank(company.get(key)):
+            company[key] = None
+    for key in ("employee_count", "founded_year"):
+        if not isinstance(company.get(key), int) or company[key] <= 0:
+            company[key] = None
+    tech = r.get("tech_stack", {})
+    for key, value in list(tech.items()):
+        if _blank(value):
+            tech[key] = None
+    r["leadership"] = [
+        p for p in r.get("leadership", [])
+        if not _blank(p.get("name")) and not _blank(p.get("title"))
+    ]
+    r["business_signals"] = [s for s in r.get("business_signals", []) if not _blank(s)]
+    return r
 
 
 def run_strategist(company_profile: dict, scoring: dict, model: str = None) -> dict:
@@ -302,7 +359,13 @@ def run_full_pipeline(
     ip_address: str = None,
     location: str = None,
     model: str = None,
+    on_step=None,
 ) -> dict:
+    """Runs every agent in order. `on_step(key)` is called before each one
+    (research, score, strategy, risk, news) so a UI can show progress."""
+    step = on_step or (lambda key: None)
+
+    step("research")
     researcher_output = run_researcher(
         company_name=company_name,
         partial_domain=partial_domain,
@@ -316,20 +379,33 @@ def run_full_pipeline(
         "time_on_site_seconds": 0,
         "visits_this_week": 0,
     }
+    researcher_output = clean_research(researcher_output)
+
+    step("score")
     scorer_output = run_scorer(signals_for_scoring, model)
 
+    step("strategy")
     strategist_output = run_strategist(researcher_output, scorer_output, model)
+    step("risk")
     risk_output = run_risk_analyst(researcher_output, scorer_output, model)
 
-    try:
-        news_output = run_news_and_sources(
-            researcher_output["company"]["name"],
-            researcher_output["company"].get("domain"),
-            model,
-        )
-    except Exception:
-        # Search grounding has its own quota separate from the other calls —
-        # degrade to "no news found" rather than failing the whole pipeline.
+    step("news")
+    news_unavailable = False
+    if company_name and company_name.strip():
+        try:
+            news_output = run_news_and_sources(
+                researcher_output["company"]["name"],
+                researcher_output["company"].get("domain"),
+                model,
+            )
+        except Exception:
+            # Search grounding has its own quota separate from the other calls —
+            # degrade to "no news" rather than failing the whole pipeline, and
+            # flag it so the UI can say so instead of silently showing nothing.
+            news_output = {"recent_news": [], "sources": []}
+            news_unavailable = True
+    else:
+        # IP-only: there's no identified company to search news for.
         news_output = {"recent_news": [], "sources": []}
 
     return {
@@ -345,4 +421,5 @@ def run_full_pipeline(
         "recent_news": news_output.get("recent_news", []),
         "sources": news_output.get("sources", []),
         "confidence_notes": strategist_output["confidence_notes"],
+        "news_unavailable": news_unavailable,
     }

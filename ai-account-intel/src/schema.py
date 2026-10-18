@@ -89,6 +89,7 @@ class AccountIntel(BaseModel):
     recent_news: List[NewsItem] = []
     sources: List[Source] = []
     confidence_notes: str
+    news_unavailable: bool = False
 
 
 class VisitorSignal(BaseModel):
