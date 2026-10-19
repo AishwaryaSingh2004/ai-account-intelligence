@@ -589,7 +589,7 @@ def news_html(parsed) -> str:
             return """
 <div class="ai-grid"><div class="ai-card rise" style="--d:.4s">
   <h3><span class="ic">&#9889;</span>Recent news</h3>
-  <p class="empty">Live news search isn't available right now (the API key's Google Search quota is used up). The rest of this report is unaffected; try again later for news and source links.</p>
+  <p class="empty">Live news search isn't available right now (the Google Search quota is used up or the service is busy). The rest of this report is unaffected; try again later for news and source links.</p>
 </div></div>"""
         return ""
     rows = []

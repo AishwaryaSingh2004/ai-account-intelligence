@@ -2,7 +2,9 @@ import json
 import time
 from google import genai
 from google.genai import types        
-from src import config
+from pydantic import ValidationError
+
+from src import config, schema
 
 _client = None
 
@@ -22,16 +24,73 @@ def get_client():
     return _client
 
 
-def call_agent(system_prompt: str, user_prompt: str, model: str = None, temperature: float = None) -> dict:
-    """Calls Gemini with JSON mode enabled. Retries on free-tier rate limits
-    and on truncated/malformed JSON output (both transient) using settings
-    from config.py — no numbers hardcoded here."""
+_RATE_LIMIT_CODES = {429}
+_SERVER_ERROR_CODES = {500, 502, 503, 504}
+_MODEL_GONE_CODES = {404}
+
+
+def _error_code(e: Exception):
+    code = getattr(e, "code", None)
+    if isinstance(code, int):
+        return code
+    text = str(e)
+    for c in _RATE_LIMIT_CODES | _SERVER_ERROR_CODES | _MODEL_GONE_CODES:
+        if text.startswith(str(c)) or f"'code': {c}" in text:
+            return c
+    return None
+
+
+def is_rate_limited(e: Exception) -> bool:
+    return _error_code(e) in _RATE_LIMIT_CODES or "RESOURCE_EXHAUSTED" in str(e)
+
+
+def is_overloaded(e: Exception) -> bool:
+    """Google-side outages: the model is busy (503) or errored (5xx)."""
+    text = str(e)
+    return _error_code(e) in _SERVER_ERROR_CODES or "UNAVAILABLE" in text or "DEADLINE_EXCEEDED" in text
+
+
+def model_unavailable(e: Exception) -> bool:
+    """The model itself can't be used on this key (retired or not found)."""
+    return _error_code(e) in _MODEL_GONE_CODES or "NOT_FOUND" in str(e)
+
+
+class IncompleteResponse(ValueError):
+    """The model's JSON was cut off or is missing fields the agent needs."""
+
+
+# Newer Gemini models "think" before answering, and those reasoning tokens
+# count toward max_output_tokens. With a small limit (the old 1024) the
+# answer itself gets cut off mid-JSON, so never go below this floor.
+MIN_OUTPUT_TOKENS = 8192
+
+
+def output_token_limit() -> int:
+    return max(config.MAX_OUTPUT_TOKENS, MIN_OUTPUT_TOKENS)
+
+
+def call_agent(system_prompt: str, user_prompt: str, output_schema, model: str = None,
+               temperature: float = None) -> dict:
+    """Calls Gemini with JSON mode enabled, using settings from config.py.
+
+    Transient failures are handled without failing the run: a rate-limited
+    (429), overloaded (5xx) or retired/unknown (404) model switches straight
+    to the next fallback model, since each model has its own quota; malformed
+    or incomplete JSON is retried on the same model. The last model in the
+    chain waits and retries before giving up. Anything else (bad key, bad
+    request) fails immediately, since retrying can't fix it.
+
+    `output_schema` (a Pydantic model) is sent to Gemini as the response
+    schema, so the model is constrained to that structure, and the answer is
+    validated against it; a truncated or mis-shaped answer is retried like
+    bad JSON. Returns plain JSON-compatible data."""
     client = get_client()
     active_model = model or config.GEMINI_MODEL
     generation_config = types.GenerateContentConfig(
         system_instruction=system_prompt,
         response_mime_type="application/json",
-        max_output_tokens=config.MAX_OUTPUT_TOKENS,
+        response_schema=output_schema,
+        max_output_tokens=output_token_limit(),
         temperature=temperature,
     )
 
@@ -41,27 +100,36 @@ def call_agent(system_prompt: str, user_prompt: str, model: str = None, temperat
             contents=user_prompt,
             config=generation_config,
         )
-        return json.loads(response.text)
+        finish = getattr(response.candidates[0], "finish_reason", None) if response.candidates else None
+        if finish is not None and getattr(finish, "name", str(finish)) == "MAX_TOKENS":
+            raise IncompleteResponse(f"{model_name} hit the output token limit")
+        try:
+            parsed = output_schema.model_validate(json.loads(response.text or ""))
+        except ValidationError as e:
+            raise IncompleteResponse(f"{model_name} returned the wrong structure: {e.errors()[:3]}") from e
+        return parsed.model_dump(mode="json")
+
+    models = list(dict.fromkeys([active_model, *config.FALLBACK_MODELS]))
 
     last_error = None
-    for attempt in range(config.MAX_RETRIES):
-        try:
-            return generate(active_model)
-        except json.JSONDecodeError as e:
-            last_error = e
-            time.sleep(config.RETRY_BASE_WAIT_SECONDS * (attempt + 1))
-        except Exception as e:
-            last_error = e
-            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+    for i, model_name in enumerate(models):
+        is_last_model = i == len(models) - 1
+        for attempt in range(config.MAX_RETRIES):
+            try:
+                return generate(model_name)
+            except (json.JSONDecodeError, IncompleteResponse) as e:
+                last_error = e
+            except Exception as e:
+                last_error = e
+                if model_unavailable(e):
+                    break  # retired or unknown model: move on to the next one
+                if (is_overloaded(e) or is_rate_limited(e)) and not is_last_model:
+                    break  # busy or rate-limited (quotas are per model): try the next one instead of waiting
+                if not (is_overloaded(e) or is_rate_limited(e)):
+                    raise
+            if attempt < config.MAX_RETRIES - 1:
                 time.sleep(config.RETRY_BASE_WAIT_SECONDS * (attempt + 1))
-            else:
-                raise
-    if active_model != config.GEMINI_FALLBACK_MODEL:
-        try:
-            return generate(config.GEMINI_FALLBACK_MODEL)
-        except Exception as e:
-            last_error = e
-    raise RuntimeError(f"Failed after {config.MAX_RETRIES} retries: {last_error}")
+    raise RuntimeError(f"Gemini failed on {', '.join(models)} after retries: {last_error}")
 
 
 def run_researcher(
@@ -127,7 +195,7 @@ Rules:
     else:
         raise ValueError("Must provide either a company_name or an ip_address/location.")
 
-    return call_agent(system, user, model)
+    return call_agent(system, user, schema.ResearchOutput, model)
 
 
 def run_scorer(visitor_signals: dict, model: str = None) -> dict:
@@ -155,7 +223,7 @@ IMPORTANT ON SCORING:
 "stage" must be exactly one of: "Awareness", "Evaluation", "Decision"."""
     user = f"Visitor signals: {json.dumps(visitor_signals)}"
     # Temperature 0 so the same behavior always gets the same score.
-    result = call_agent(system, user, model, temperature=0)
+    result = call_agent(system, user, schema.ScoringOutput, model, temperature=0)
     intent = result.get("intent", {})
     score = max(0.0, min(10.0, float(intent.get("score", 0))))
     intent["score"] = round(score, 1)
@@ -218,7 +286,7 @@ profile is a low-confidence IP-based inference rather than a named company,
 say so plainly in confidence_notes and recommend identity confirmation as a
 next step before outreach."""
     user = f"Company profile: {json.dumps(company_profile)}\nScoring: {json.dumps(scoring)}"
-    return call_agent(system, user, model)
+    return call_agent(system, user, schema.StrategyOutput, model)
 
 
 def run_risk_analyst(company_profile: dict, scoring: dict, model: str = None) -> dict:
@@ -250,7 +318,7 @@ Rules:
   Awareness should be "High" risk.
 - Keep each explanation to one concise sentence."""
     user = f"Company profile: {json.dumps(company_profile)}\nScoring: {json.dumps(scoring)}"
-    return call_agent(system, user, model)
+    return call_agent(system, user, schema.RiskAnalysis, model)
 
 
 def run_news_and_sources(company_name: str, domain: str = None, model: str = None) -> dict:
@@ -293,7 +361,7 @@ Rules:
     generation_config = types.GenerateContentConfig(
         system_instruction=system,
         tools=[types.Tool(google_search=types.GoogleSearch())],
-        max_output_tokens=config.MAX_OUTPUT_TOKENS,
+        max_output_tokens=output_token_limit(),
     )
     response = client.models.generate_content(
         model=active_model, contents=user, config=generation_config,
@@ -348,7 +416,7 @@ Rules:
 Return ONLY valid JSON matching this schema, and nothing else:
 {"answer": ""}"""
     user = f"Account intelligence:\n{json.dumps(account_intel)}\n\nQuestion: {question}"
-    result = call_agent(system, user, model)
+    result = call_agent(system, user, schema.QnAOutput, model)
     return result.get("answer", "")
 
 

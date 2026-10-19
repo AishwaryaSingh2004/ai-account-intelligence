@@ -107,6 +107,17 @@ def intent_explanation() -> str:
     )
 
 
+def friendly_error(e: Exception) -> str:
+    """Plain-English message for the errors a user can actually hit."""
+    if agents.is_overloaded(e):
+        return "Gemini is overloaded right now (a temporary Google-side issue). Please try again in a minute."
+    if agents.is_rate_limited(e):
+        return "The Gemini rate limit was reached. Please wait 30 to 60 seconds and try again."
+    if "API key" in str(e) or "GEMINI_API_KEY" in str(e):
+        return f"Gemini API key problem: {e}"
+    return f"Something went wrong: {e}"
+
+
 # ---------- RUN ----------
 if analyze_clicked:
     has_identity_input = bool(company_name.strip()) or bool(ip_address.strip()) or bool(location.strip())
@@ -150,8 +161,7 @@ if analyze_clicked:
         # Catch-all error handling
         except Exception as e:
             tracker.empty()
-            st.error(f"Something went wrong: {e}")
-            st.caption("If this mentions a rate limit (429), wait ~30-60s and try again.")
+            st.error(friendly_error(e))
 
 # ---------- RESULTS + AI RESEARCH AGENT (persisted across reruns, e.g. when asking a question) ----------
 if "parsed" in st.session_state:
@@ -221,7 +231,7 @@ if "parsed" in st.session_state:
                 st.session_state.qna_history.pop(dedup_key, None)  # re-asking replaces, not duplicates
                 st.session_state.qna_history[dedup_key] = (question_to_ask.strip(), answer)
             except Exception as e:
-                st.error(f"Something went wrong answering that: {e}")
+                st.error(friendly_error(e))
 
     history = list(reversed(list(st.session_state.get("qna_history", {}).values())))
     qa = ui.qna_html(history)

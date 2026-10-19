@@ -92,6 +92,30 @@ class AccountIntel(BaseModel):
     news_unavailable: bool = False
 
 
+# ---- Per-agent outputs: passed to Gemini as response schemas so every model,
+# including the lighter fallback ones, must return exactly this structure.
+class ResearchOutput(BaseModel):
+    company: Company
+    tech_stack: TechStack
+    business_signals: List[str]
+    leadership: List[Leader]
+
+
+class ScoringOutput(BaseModel):
+    persona: Persona
+    intent: Intent
+
+
+class StrategyOutput(BaseModel):
+    ai_summary: str
+    recommended_action: RecommendedAction
+    confidence_notes: str
+
+
+class QnAOutput(BaseModel):
+    answer: str
+
+
 class VisitorSignal(BaseModel):
     visitor_id: Optional[str] = None
     ip: Optional[str] = None
