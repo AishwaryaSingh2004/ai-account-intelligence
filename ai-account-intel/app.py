@@ -1,9 +1,19 @@
+import importlib
+
 import streamlit as st
 
-from src import config, ui
-from src.agents import run_full_pipeline, run_qna
-from src.validate import validate_intel
-from src.report import build_pdf
+from src import config, schema, validate, agents, report, ui
+
+# Re-load the project's own modules on every run. Streamlit re-executes this
+# script after a deploy but keeps already-imported modules in memory, so without
+# this a new app.py can end up calling an old src/agents.py (e.g. "unexpected
+# keyword argument 'on_step'"). Order matters: dependencies first.
+for _module in (config, schema, validate, agents, report, ui):
+    importlib.reload(_module)
+
+run_full_pipeline, run_qna = agents.run_full_pipeline, agents.run_qna
+validate_intel = validate.validate_intel
+build_pdf = report.build_pdf
 
 st.set_page_config(page_title="AI Account Intelligence", page_icon="🛰️", layout="wide")
 
