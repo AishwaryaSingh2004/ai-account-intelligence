@@ -127,6 +127,7 @@ ai-account-intel/
     ├── validate.py        # schema validation helper
     ├── agents.py          # the agent pipeline + Q&A agent
     ├── report.py          # PDF report generation
+    ├── ui.py              # page theme (CSS) and HTML for each results card
     └── data/
         ├── sample_companies.json
         └── sample_visitor_signals.json
@@ -165,8 +166,8 @@ The repo also includes a Dev Container config, so it runs in GitHub Codespaces w
 
 Provide at least one way to identify a company:
 
-- **Company name** (most reliable), e.g. `BrightPath Lending`, optionally with a **partial domain** to sharpen identification.
-- **IP address and/or location** with no company name, to simulate identifying an anonymous visitor via reverse-IP lookup.
+- **Company name** (most reliable), e.g. `BrightPath Lending`, optionally with a **website or domain** to sharpen identification. A website on its own (e.g. `fello.ai`) also works.
+- **IP address and/or location** with no company name, to simulate identifying an anonymous visitor via reverse-IP lookup. IP addresses are validated (IPv4 or IPv6) before anything is sent to the model.
 - **Visitor behavior** (optional, collapsible) — pages visited, time on site, visits this week, referral source, device. This moves the intent score and persona from "no signal" to a real inference.
 
 Click **Analyze**, then explore the results, ask the AI Research Agent follow-up questions, or download the PDF report.
@@ -189,13 +190,16 @@ Both test paths use the sample data in `src/data/`:
 - **Narrow agents over one big prompt.** Each agent has one job, which makes outputs more consistent, failures easier to debug, and any step replaceable (e.g. swapping the Researcher for real enrichment APIs) without touching the rest.
 - **Schema-validated output.** Every result is parsed into Pydantic models with enums and range constraints (intent 0–10, confidence 0–1, stage ∈ Awareness/Evaluation/Decision), so malformed model output fails cleanly instead of corrupting the UI.
 - **Calibrated scoring.** The Scorer prompt includes explicit score bands and a worked example — without them, the model confused the 0–10 intent scale with the 0–1 confidence scale.
-- **Consistent intent.** The Scorer runs at temperature 0, and the funnel stage is derived from the score with fixed cutoffs (under 4 Awareness, 4–8.9 Evaluation, 9+ Decision), so the same behavior always gets the same score and stage.
+- **Consistent intent.** The Scorer runs at temperature 0 on normalized input, and the funnel stage is derived from the score with fixed cutoffs (under 4 Awareness, 4–8.9 Evaluation, 9+ Decision), so the same behavior always gets the same score and stage. With no behavior at all, the result is a fixed 0 / Awareness with no model call.
 - **No placeholder data.** Model placeholders like "N/A" or "unknown" are turned into blanks, and the Researcher returns no leadership rather than inventing names for companies it doesn't know.
 - **Gemini as a simulated enrichment engine.** In production, the Researcher would call real enrichment APIs (Clearbit, Apollo, BuiltWith) and a real reverse-IP service. Using Gemini for that step was a deliberate choice to ship a working end-to-end system inside the hackathon window.
 - **Anonymous visitors get a role, not a name.** The Scorer infers a likely persona (e.g. "Decision Maker") but never attaches a name to a visitor. Named individuals appear only under Leadership, as suggested outreach targets.
 - **IP-only identification is explicitly low-confidence.** With no company name, the system returns a clearly labeled inference instead of inventing a specific company, and says so in `confidence_notes`.
-- **Built for the free tier.** `call_agent` forces JSON output, retries with backoff on rate limits (429) and malformed JSON, then falls back to a second model. The search-grounded news step has its own quota, so it degrades to "no news found" rather than failing the whole run.
-- **Search grounding workaround.** Gemini's JSON response mode can't be combined with the Google Search tool, so the news agent asks for raw JSON in the prompt, strips any code fences, parses it manually, and merges in the URLs from the grounding metadata.
+- **Structured output on every agent.** Each agent passes its Pydantic model to Gemini as the response schema and validates the answer, so even the lighter fallback models return exactly the expected structure. Output tokens never drop below 8,192, since thinking models spend part of that budget on reasoning.
+- **Resilient to outages and the free tier.** A rate-limited (429), overloaded (5xx) or retired (404) model switches straight to the next model in a fallback chain (`GEMINI_FALLBACK_MODEL` + `GEMINI_EXTRA_FALLBACK_MODELS`); cut-off or mis-shaped answers are retried; users see plain-English errors. The search-grounded news step has its own quota, so it degrades to a "news unavailable" note rather than failing the run, and malformed news items are dropped individually.
+- **Parallel where possible.** News runs alongside the Scorer and the Risk Analyst alongside the Strategist, which roughly halves the wait.
+- **Safe redeploys.** Streamlit keeps imported modules in memory across a deploy, so `app.py` reloads the project's own modules whenever their files change. Streamlit is pinned to the version the custom UI was tested on.
+- **Search grounding workaround.** Gemini's JSON response mode can't be combined with the Google Search tool, so the news agent asks for raw JSON in the prompt, extracts the JSON object from the reply, validates each item, and merges in the URLs from the grounding metadata.
 
 ## Known limitations / what's next
 

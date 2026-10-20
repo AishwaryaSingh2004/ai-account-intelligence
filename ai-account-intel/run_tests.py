@@ -2,6 +2,7 @@ import json
 import time
 from src.agents import run_full_pipeline
 from src.validate import validate_intel
+from src import config
 
 with open("src/data/sample_companies.json") as f:
     companies = json.load(f)
@@ -22,7 +23,7 @@ for category, entries in companies.items():
         except Exception as e:
             status = f"CRASHED: {e}"
         print(f"[{category}] '{name}' -> {status}")
-        time.sleep(2)  # stay under the free-tier RPM cap across a long test run
+        time.sleep(config.BATCH_DELAY_SECONDS)  # stay under the free-tier RPM cap across a long test run
 
 print("\n=== VISITOR SIGNAL TESTS ===")
 for category, signals in visitors.items():
@@ -35,4 +36,4 @@ for category, signals in visitors.items():
     except Exception as e:
         status = f"CRASHED: {e}"
     print(f"[{category}] -> {status}")
-    time.sleep(2)
+    time.sleep(config.BATCH_DELAY_SECONDS)

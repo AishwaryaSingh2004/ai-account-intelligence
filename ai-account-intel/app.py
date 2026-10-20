@@ -1,15 +1,23 @@
 import importlib
+import ipaddress
+import re
+from pathlib import Path
 
 import streamlit as st
 
+import src
 from src import config, schema, validate, agents, report, ui
 
-# Re-load the project's own modules on every run. Streamlit re-executes this
-# script after a deploy but keeps already-imported modules in memory, so without
-# this a new app.py can end up calling an old src/agents.py (e.g. "unexpected
-# keyword argument 'on_step'"). Order matters: dependencies first.
-for _module in (config, schema, validate, agents, report, ui):
-    importlib.reload(_module)
+# Streamlit re-executes this script after a deploy but keeps already-imported
+# modules in memory, so a new app.py could call an old src/agents.py (this
+# caused "unexpected keyword argument 'on_step'" in production). Reload the
+# project's own modules whenever their files change. Order matters:
+# dependencies first.
+_src_version = max(f.stat().st_mtime_ns for f in Path(src.__file__).parent.glob("*.py"))
+if getattr(src, "_loaded_version", None) != _src_version:
+    for _module in (config, schema, validate, agents, report, ui):
+        importlib.reload(_module)
+    src._loaded_version = _src_version
 
 run_full_pipeline, run_qna = agents.run_full_pipeline, agents.run_qna
 validate_intel = validate.validate_intel
@@ -62,12 +70,12 @@ with st.container(key="input_panel"):
 pages_visited = [p.strip() for p in pages_visited_raw.split("\n") if p.strip()] if pages_visited_raw else []
 
 
-def observed_signals() -> list:
+def observed_signals(ip: str) -> list:
     """The visitor inputs as short chips, captured at analysis time so editing
     the form afterwards doesn't change what an existing report shows."""
     out = []
-    if ip_address.strip():
-        out.append(f"IP {ip_address.strip()}")
+    if ip:
+        out.append(f"IP {ip}")
     if location.strip():
         out.append(f"Location: {location.strip()}")
     out += [f"Visited {p}" for p in pages_visited]
@@ -120,11 +128,29 @@ def friendly_error(e: Exception) -> str:
 
 # ---------- RUN ----------
 if analyze_clicked:
-    has_identity_input = bool(company_name.strip()) or bool(ip_address.strip()) or bool(location.strip())
+    name = company_name.strip()
+    domain = partial_domain.strip()
+    ip = ip_address.strip()
+    if not name and domain:
+        name = agents.normalize_domain(domain) or domain  # a website alone is enough to identify a company
+    has_identity_input = bool(name or ip or location.strip())
+
+    ip_error = None
+    if ip:
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            ip_error = f"\"{ip}\" isn't a valid IP address. Use a format like 34.201.112.55 (IPv4) or 2001:db8::1 (IPv6)."
 
     if not has_identity_input:
-        st.error("Enter a company name, OR an IP address / location for anonymous-visitor identification.")
+        st.error("Enter a company name or website, OR an IP address / location for anonymous-visitor identification.")
+    elif ip_error and not name:
+        st.error(ip_error)
     else:
+        if ip_error:
+            st.warning(ip_error + " It was ignored; the analysis uses the company name.")
+            ip = ""
+
         has_behavior_data = bool(pages_visited or time_on_site or visits_this_week or referral_source or device)
 
         visitor_signals = None
@@ -140,10 +166,10 @@ if analyze_clicked:
         tracker = st.empty()
         try:
             raw_result = run_full_pipeline(
-                company_name=company_name.strip() or None,
-                partial_domain=partial_domain or None,
+                company_name=name or None,
+                partial_domain=domain or None,
                 visitor_signals=visitor_signals,
-                ip_address=ip_address.strip() or None,
+                ip_address=ip or None,
                 location=location.strip() or None,
                 model=model_choice,
                 on_step=lambda key: tracker.html(ui.tracker_html(key)),
@@ -155,9 +181,10 @@ if analyze_clicked:
                 st.error(f"Model output did not match expected schema:\n\n{error}")
             else:
                 st.session_state.parsed = parsed
-                st.session_state.observed = observed_signals()
+                st.session_state.observed = observed_signals(ip)
                 st.session_state.intent_help = intent_explanation()
                 st.session_state.qna_history = {}
+                st.session_state.qna_input = ""  # a new report starts with an empty question box
         # Catch-all error handling
         except Exception as e:
             tracker.empty()
@@ -168,7 +195,7 @@ if "parsed" in st.session_state:
     parsed = st.session_state.parsed
     if not hasattr(parsed, "risks"):
         del st.session_state["parsed"]  # stale object from before a schema change
-        st.info("This app was updated since your last analysis — please click Analyze again.")
+        st.info("This app was updated since your last analysis. Please click \"Run the agents\" again.")
         st.stop()
     if not isinstance(st.session_state.get("qna_history"), dict):
         st.session_state.qna_history = {}  # heal stale sessions carrying the old list format
@@ -182,7 +209,7 @@ if "parsed" in st.session_state:
         st.download_button(
             "⬇  Download PDF",
             data=build_pdf(parsed),
-            file_name=f"{parsed.company.name.replace(' ', '_')}_account_intel.pdf",
+            file_name=f"{re.sub(r'[^A-Za-z0-9._-]+', '_', parsed.company.name).strip('_') or 'account'}_account_intel.pdf",
             mime="application/pdf",
         )
 
@@ -222,6 +249,8 @@ if "parsed" in st.session_state:
         ask_clicked = st.button("Ask AI", type="primary", key="ask_ai_button")
 
     question_to_ask = example_clicked or (custom_question.strip() if ask_clicked and custom_question.strip() else None)
+    if ask_clicked and not question_to_ask:
+        st.warning("Type a question first, or pick one of the examples above.")
 
     if question_to_ask:
         with st.spinner("Thinking..."):

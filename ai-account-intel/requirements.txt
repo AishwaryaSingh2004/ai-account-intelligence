@@ -2,6 +2,7 @@
 # test IDs, which can change between releases. Bump it only after checking the UI.
 streamlit==1.59.2
 google-genai>=2.11,<3
+httpx>=0.28,<1
 pydantic>=2.13,<3
 python-dotenv>=1.2,<2
 fpdf2>=2.8,<3

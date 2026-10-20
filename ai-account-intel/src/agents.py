@@ -1,5 +1,7 @@
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
+import httpx
 from google import genai
 from google.genai import types        
 from pydantic import ValidationError
@@ -20,7 +22,12 @@ def get_client():
                 "to Streamlit secrets (deployed) — get a free key at "
                 "https://aistudio.google.com"
             )
-        _client = genai.Client(api_key=config.GEMINI_API_KEY)
+        # A timeout so a stalled request fails over to the next model instead
+        # of hanging the app forever (the SDK has none by default).
+        _client = genai.Client(
+            api_key=config.GEMINI_API_KEY,
+            http_options=types.HttpOptions(timeout=config.REQUEST_TIMEOUT_SECONDS * 1000),
+        )
     return _client
 
 
@@ -45,9 +52,14 @@ def is_rate_limited(e: Exception) -> bool:
 
 
 def is_overloaded(e: Exception) -> bool:
-    """Google-side outages: the model is busy (503) or errored (5xx)."""
+    """Google-side outages: the model is busy (503), errored (5xx), timed out
+    or the connection dropped."""
     text = str(e)
-    return _error_code(e) in _SERVER_ERROR_CODES or "UNAVAILABLE" in text or "DEADLINE_EXCEEDED" in text
+    return (
+        isinstance(e, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError))
+        or _error_code(e) in _SERVER_ERROR_CODES
+        or "UNAVAILABLE" in text or "DEADLINE_EXCEEDED" in text or "timed out" in text
+    )
 
 
 def model_unavailable(e: Exception) -> bool:
@@ -119,6 +131,7 @@ def call_agent(system_prompt: str, user_prompt: str, output_schema, model: str =
                 return generate(model_name)
             except (json.JSONDecodeError, IncompleteResponse) as e:
                 last_error = e
+                continue  # a fresh attempt can fix a bad answer; no need to wait
             except Exception as e:
                 last_error = e
                 if model_unavailable(e):
@@ -171,9 +184,9 @@ Rules:
   company.description that this is a simulated reverse-IP inference limited by
   available data, naming the most plausible industry/company type given the
   location and any other signals.
-- If you cannot verify a field, make a reasonable inference rather than
-  leaving it blank, and note uncertainty in business_signals or description
-  instead of inventing false precision.
+- When you can't verify a field but have a reasonable basis (industry,
+  location, typical company of this type), give your best inference and note
+  the uncertainty in the description. When you have no basis at all, use null.
 - Never claim you performed a lookup you cannot perform (WHOIS, reverse DNS,
   database checks). Phrase IP-based findings as inferences ("likely", "appears").
 - Use null for any field you have no basis for (domain, employee_count,
@@ -198,7 +211,23 @@ Rules:
     return call_agent(system, user, schema.ResearchOutput, model)
 
 
+NO_SIGNAL_SCORING = {
+    "persona": {"likely_role": "Unknown (no visitor behavior provided)", "confidence": 0.0},
+    "intent": {"score": 0.0, "stage": "Awareness"},
+}
+
+
+def has_behavior(visitor_signals: dict) -> bool:
+    if not visitor_signals:
+        return False
+    return any(visitor_signals.get(k) for k in
+               ("pages_visited", "time_on_site_seconds", "visits_this_week", "referral_source", "device"))
+
+
 def run_scorer(visitor_signals: dict, model: str = None) -> dict:
+    if not has_behavior(visitor_signals):
+        # Nothing to score: a fixed answer, so it's always 0 / Awareness and costs no API call.
+        return json.loads(json.dumps(NO_SIGNAL_SCORING))
     system = """You are a visitor-behavior analyst. Given raw browsing signals,
 infer the visitor's likely persona and an intent score. Return ONLY valid JSON,
 nothing else:
@@ -221,8 +250,11 @@ IMPORTANT ON SCORING:
 - Example: pages ["/pricing", "/case-studies"], 3 visits this week,
   222 seconds on site -> score should be around 8.0-8.5, stage "Evaluation".
 "stage" must be exactly one of: "Awareness", "Evaluation", "Decision"."""
-    user = f"Visitor signals: {json.dumps(visitor_signals)}"
-    # Temperature 0 so the same behavior always gets the same score.
+    # Drop empty fields and fix key order so the same behavior always produces
+    # the exact same prompt (e.g. "device": null vs. no device key gave
+    # different scores), then score at temperature 0.
+    signals = {k: v for k, v in sorted(visitor_signals.items()) if v not in (None, "", [])}
+    user = f"Visitor signals: {json.dumps(signals)}"
     result = call_agent(system, user, schema.ScoringOutput, model, temperature=0)
     intent = result.get("intent", {})
     score = max(0.0, min(10.0, float(intent.get("score", 0))))
@@ -249,13 +281,25 @@ def _blank(value):
     return value is None or (isinstance(value, str) and value.strip().lower() in _PLACEHOLDERS)
 
 
+def normalize_domain(domain):
+    """"https://www.Fello.ai/" -> "fello.ai"; placeholders -> None."""
+    if _blank(domain):
+        return None
+    d = str(domain).strip().lower()
+    for prefix in ("https://", "http://"):
+        if d.startswith(prefix):
+            d = d[len(prefix):]
+    d = d.split("/")[0].split("?")[0]
+    if d.startswith("www."):
+        d = d[4:]
+    return d or None
+
+
 def clean_research(r: dict) -> dict:
     """Turns the model's placeholder values ("N/A", "unknown", 0) into real
     blanks so the UI and PDF show "Unknown" instead of fake data."""
     company = r.get("company", {})
-    for key in ("domain",):
-        if _blank(company.get(key)):
-            company[key] = None
+    company["domain"] = normalize_domain(company.get("domain"))
     for key in ("employee_count", "founded_year"):
         if not isinstance(company.get(key), int) or company[key] <= 0:
             company[key] = None
@@ -271,7 +315,7 @@ def clean_research(r: dict) -> dict:
     return r
 
 
-def run_strategist(company_profile: dict, scoring: dict, model: str = None) -> dict:
+def run_strategist(company_profile: dict, scoring: dict, visitor_signals: dict = None, model: str = None) -> dict:
     system = """You are a sales strategist. Given a company profile and visitor
 scoring data, write a 2-3 sentence plain-English summary and concrete next actions
 for a salesperson. Return ONLY valid JSON, nothing else:
@@ -281,11 +325,17 @@ for a salesperson. Return ONLY valid JSON, nothing else:
   "confidence_notes": ""
 }
 Reference specific facts from the input (company name, pages visited, industry) —
-do not write a generic summary that could apply to any company. If the company
+do not write a generic summary that could apply to any company. Only mention
+pages or behavior that appear in the visitor signals; if none were provided,
+say the assessment is based on the company profile alone. If the company
 profile is a low-confidence IP-based inference rather than a named company,
 say so plainly in confidence_notes and recommend identity confirmation as a
 next step before outreach."""
-    user = f"Company profile: {json.dumps(company_profile)}\nScoring: {json.dumps(scoring)}"
+    user = (
+        f"Company profile: {json.dumps(company_profile)}\n"
+        f"Visitor signals: {json.dumps(visitor_signals) if visitor_signals else 'none provided'}\n"
+        f"Scoring: {json.dumps(scoring)}"
+    )
     return call_agent(system, user, schema.StrategyOutput, model)
 
 
@@ -313,9 +363,9 @@ Rules:
   explanation that it's an inferred baseline, not observed evidence — never
   default everything to "Low" with no reasoning.
 - "low_buying_intent" must specifically reference the visitor's intent score
-  and stage from the scoring data: score 7-10 / stage Decision or Evaluation
-  should be "Low" risk; score 4-6 should be "Medium"; score 0-3 / stage
-  Awareness should be "High" risk.
+  and stage from the scoring data: a score of 7 or above is "Low" risk, a
+  score from 4 up to (not including) 7 is "Medium", and a score below 4 is
+  "High".
 - Keep each explanation to one concise sentence."""
     user = f"Company profile: {json.dumps(company_profile)}\nScoring: {json.dumps(scoring)}"
     return call_agent(system, user, schema.RiskAnalysis, model)
@@ -363,21 +413,30 @@ Rules:
         tools=[types.Tool(google_search=types.GoogleSearch())],
         max_output_tokens=output_token_limit(),
     )
-    response = client.models.generate_content(
-        model=active_model, contents=user, config=generation_config,
-    )
-    text = response.text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:]
-    result = json.loads(text)
-    result.setdefault("recent_news", [])
-    result.setdefault("sources", [])
+    # Same fallback chain as the other agents: an overloaded or rate-limited
+    # model shouldn't cost the report its news.
+    response, last_error = None, None
+    for model_name in dict.fromkeys([active_model, *config.FALLBACK_MODELS]):
+        try:
+            response = client.models.generate_content(model=model_name, contents=user, config=generation_config)
+            break
+        except Exception as e:
+            last_error = e
+            if not (is_overloaded(e) or is_rate_limited(e) or model_unavailable(e)):
+                raise
+    if response is None:
+        raise RuntimeError(f"News search failed on every model: {last_error}")
+
+    result = _extract_json_object(response.text or "")
+    # News is best-effort: keep only well-formed items instead of letting one
+    # bad item fail validation of the whole report.
+    news = [_valid(schema.NewsItem, n) for n in result.get("recent_news") or []]
+    sources = [_valid(schema.Source, s) for s in result.get("sources") or []]
+    result = {"recent_news": [n for n in news if n][:5], "sources": [s for s in sources if s]}
 
     # Merge in the real grounding source URLs Google Search actually used,
     # in case the model didn't already list them under "sources".
-    known_urls = {s.get("url") for s in result["sources"]}
+    known_urls = {s["url"] for s in result["sources"]}
     try:
         chunks = response.candidates[0].grounding_metadata.grounding_chunks or []
         for chunk in chunks:
@@ -389,6 +448,25 @@ Rules:
         pass
 
     return result
+
+
+def _extract_json_object(text: str) -> dict:
+    """Parses the first JSON object in free text (search answers sometimes add
+    code fences or a sentence around the JSON)."""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        raise json.JSONDecodeError("No JSON object found", text, 0)
+    parsed = json.loads(text[start:end + 1])
+    if not isinstance(parsed, dict):
+        raise json.JSONDecodeError("Expected a JSON object", text, start)
+    return parsed
+
+
+def _valid(model_cls, item):
+    try:
+        return model_cls.model_validate(item).model_dump(mode="json")
+    except ValidationError:
+        return None
 
 
 def run_qna(question: str, account_intel: dict, model: str = None) -> str:
@@ -420,6 +498,16 @@ Return ONLY valid JSON matching this schema, and nothing else:
     return result.get("answer", "")
 
 
+def _news_or_unavailable(company: dict, model: str = None):
+    """Search grounding has its own quota separate from the other calls, so a
+    failure here degrades to "no news" (flagged, so the UI can say so)
+    instead of failing the whole report."""
+    try:
+        return run_news_and_sources(company["name"], company.get("domain"), model), False
+    except Exception:
+        return {"recent_news": [], "sources": []}, True
+
+
 def run_full_pipeline(
     company_name: str = None,
     partial_domain: str = None,
@@ -429,8 +517,9 @@ def run_full_pipeline(
     model: str = None,
     on_step=None,
 ) -> dict:
-    """Runs every agent in order. `on_step(key)` is called before each one
-    (research, score, strategy, risk, news) so a UI can show progress."""
+    """Runs every agent and merges their output. `on_step(key)` is called as
+    each stage starts (research, score, strategy, risk, news), always from
+    the calling thread, so a UI can show progress."""
     step = on_step or (lambda key: None)
 
     step("research")
@@ -442,39 +531,31 @@ def run_full_pipeline(
         model=model,
     )
 
-    signals_for_scoring = visitor_signals or {
-        "pages_visited": [],
-        "time_on_site_seconds": 0,
-        "visits_this_week": 0,
-    }
     researcher_output = clean_research(researcher_output)
 
-    step("score")
-    scorer_output = run_scorer(signals_for_scoring, model)
+    # Independent agents run in parallel to cut waiting time: news only needs
+    # the company, and the risk analyst doesn't need the strategist's output.
+    # Progress callbacks stay on this thread (Streamlit UI calls must).
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        news_future = (
+            pool.submit(_news_or_unavailable, researcher_output["company"], model)
+            if company_name and company_name.strip() else None  # IP-only: no company to search
+        )
 
-    step("strategy")
-    strategist_output = run_strategist(researcher_output, scorer_output, model)
-    step("risk")
-    risk_output = run_risk_analyst(researcher_output, scorer_output, model)
+        step("score")
+        scorer_output = run_scorer(visitor_signals, model)
 
-    step("news")
-    news_unavailable = False
-    if company_name and company_name.strip():
-        try:
-            news_output = run_news_and_sources(
-                researcher_output["company"]["name"],
-                researcher_output["company"].get("domain"),
-                model,
-            )
-        except Exception:
-            # Search grounding has its own quota separate from the other calls —
-            # degrade to "no news" rather than failing the whole pipeline, and
-            # flag it so the UI can say so instead of silently showing nothing.
-            news_output = {"recent_news": [], "sources": []}
-            news_unavailable = True
-    else:
-        # IP-only: there's no identified company to search news for.
-        news_output = {"recent_news": [], "sources": []}
+        step("strategy")
+        risk_future = pool.submit(run_risk_analyst, researcher_output, scorer_output, model)
+        strategist_output = run_strategist(researcher_output, scorer_output, visitor_signals, model)
+
+        step("risk")
+        risk_output = risk_future.result()
+
+        step("news")
+        news_output, news_unavailable = (
+            news_future.result() if news_future else ({"recent_news": [], "sources": []}, False)
+        )
 
     return {
         "company": researcher_output["company"],

@@ -392,7 +392,7 @@ CSS = """
 
 # ------------------------------------------------------------- builders ----
 def hero_html() -> str:
-    nodes = ["Researcher", "Scorer", "Strategist", "News"]
+    nodes = ["Researcher", "Scorer", "Strategist", "Risk", "News"]
     flow = '<span class="wire"></span>'.join(
         f'<span class="node"><b>{i + 1:02d}</b>{n}</span>' for i, n in enumerate(nodes)
     )
